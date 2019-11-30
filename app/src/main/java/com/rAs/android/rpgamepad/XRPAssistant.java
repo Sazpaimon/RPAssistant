@@ -3,8 +3,16 @@ package com.rAs.android.rpgamepad;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.ActivityManager;
+import android.content.ComponentName;
 import android.content.Context;
+import android.content.Intent;
+import android.content.ServiceConnection;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.FeatureInfo;
+import android.content.pm.ServiceInfo;
 import android.os.Build;
+import android.os.Bundle;
+import android.os.IBinder;
 import android.util.Log;
 import android.view.InputDevice;
 import android.view.KeyEvent;
@@ -12,11 +20,15 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.widget.Toast;
 
+import com.limelight.binding.input.driver.UsbDriverService;
+
 import java.io.File;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.Map;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
+import de.robv.android.xposed.IXposedHookZygoteInit;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XSharedPreferences;
 import de.robv.android.xposed.XposedBridge;
@@ -24,17 +36,34 @@ import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage.LoadPackageParam;
 import de.robv.android.xposed.callbacks.XCallback;
 
-public class XRPAssistant implements IXposedHookLoadPackage, PSGamepadHandler.OnGamepadStateChangeListener {
+public class XRPAssistant implements IXposedHookLoadPackage, IXposedHookZygoteInit, PSGamepadHandler.OnGamepadStateChangeListener {
 
     private static final String APP_PACKAGE = "com.playstation.remoteplay";
-    private static final boolean log = false;
+    private static final boolean log = true;
     private static final String TAG = "RP_ASSISTANT";
     @SuppressLint("SdCardPath")
     private static final String PREFS_PATH = "/data/data/com.rAs.android.rpgamepad/shared_prefs/com.rAs.android.rpgamepad_preferences.xml";
+    private static ArrayList remotePlayServices;
+    private static Object usbService;
+    private static Object remotePlayPackage;
 
     private long prefsLoadMillis = 0;
     private static PSGamepadHandler psGamepadHandler;
     private Context context;
+    private boolean connectedToUsbDriverService = false;
+    private ServiceConnection usbDriverServiceConnection = new ServiceConnection() {
+        @Override
+        public void onServiceConnected(ComponentName componentName, IBinder iBinder) {
+            UsbDriverService.UsbDriverBinder binder = (UsbDriverService.UsbDriverBinder) iBinder;
+            binder.setListener(psGamepadHandler);
+            connectedToUsbDriverService = true;
+        }
+
+        @Override
+        public void onServiceDisconnected(ComponentName componentName) {
+            connectedToUsbDriverService = false;
+        }
+    };
 
     public static void log(Object text){
         if(!log) return;
@@ -49,6 +78,13 @@ public class XRPAssistant implements IXposedHookLoadPackage, PSGamepadHandler.On
         } else {
             Log.i(TAG, text.toString());
         }
+    }
+
+
+    @Override
+    public void initZygote(StartupParam startupParam) throws Throwable {
+        Class clsPms = XposedHelpers.findClass("android.content.pm.PackageParser", null);
+        XposedBridge.hookAllMethods(clsPms, "parsePackage", injectService);
     }
 
     @Override
@@ -153,8 +189,14 @@ public class XRPAssistant implements IXposedHookLoadPackage, PSGamepadHandler.On
 
                 if ((boolean) param.getResult()) {
                     XRPAssistant.log("Good?: " + param.getResult());
-                    XRPAssistant.log("M1: " + XposedHelpers.getObjectField(param.args[0], "mLargeMotor"));
-                    XRPAssistant.log("M2: " + XposedHelpers.getObjectField(param.args[0], "mSmallMotor"));
+                    short smallMotor = (short) XposedHelpers.getObjectField(param.args[0], "mSmallMotor");
+                    short largeMotor = (short) XposedHelpers.getObjectField(param.args[0], "mLargeMotor");
+                    XRPAssistant.log("M1: " + smallMotor);
+                    XRPAssistant.log("M2: " + largeMotor);
+                    if (connectedToUsbDriverService && psGamepadHandler.activeController != null) {
+                        psGamepadHandler.activeController.rumble(smallMotor, largeMotor);
+
+                    }
                 }
             }
         });
@@ -226,6 +268,24 @@ public class XRPAssistant implements IXposedHookLoadPackage, PSGamepadHandler.On
 			}
 		});
 
+         XposedHelpers.findAndHookMethod("o.\u04c0\u029f", lpparam.classLoader,"onCreate", Bundle.class, new XC_MethodHook() {
+            protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                ComponentName cn = new ComponentName(APP_PACKAGE, "com.limelight.binding.input.driver.UsbDriverService");
+                Intent intent = new Intent();
+                intent.setComponent(cn);
+                context.bindService(intent, usbDriverServiceConnection, Context.BIND_AUTO_CREATE);
+            }
+        });
+
+        XposedHelpers.findAndHookMethod("o.\u04c0\u029f", lpparam.classLoader, "onDestroy", new XC_MethodHook() {
+            protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                if (connectedToUsbDriverService) {
+                    // Unbind from the discovery service
+                    context.unbindService(usbDriverServiceConnection);
+                }
+            }
+        });
+
         // Hook method to tell app that controller is being used
         XposedHelpers.findAndHookMethod("o.\u017f\u04c0", lpparam.classLoader, "\u02cb", Context.class, InputDevice.class, new XC_MethodHook() {
             @Override
@@ -277,6 +337,27 @@ public class XRPAssistant implements IXposedHookLoadPackage, PSGamepadHandler.On
                 Class clazz = XposedHelpers.findClass("o.\u0196\u0268", param.thisObject.getClass().getClassLoader());
                 Object obj = XposedHelpers.getStaticObjectField(clazz, "\u02cf");
                 XposedHelpers.setBooleanField(obj, "\u0971\u02ca", false);
+            }
+        });
+
+        XposedHelpers.findAndHookMethod(System.class, "arraycopy", Object.class,  int.class, Object.class, int.class, int.class, new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                return;
+            }
+
+            @Override
+            protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                return;
+            }
+        });
+
+        XposedHelpers.findAndHookMethod(XposedHelpers.findClass("java.lang.ClassLoader", lpparam.classLoader), "loadClass", String.class, new XC_MethodHook() {
+            /* access modifiers changed from: protected */
+            public void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                if (param.args[0].equals("com.limelight.binding.input.driver.UsbDriverService")) {
+                    param.setResult(UsbDriverService.class);
+                }
             }
         });
 
@@ -355,6 +436,85 @@ public class XRPAssistant implements IXposedHookLoadPackage, PSGamepadHandler.On
                 windowStateClass, KeyEvent.class, int.class, dispatchKeyHook);
 
     }
+
+    private XC_MethodHook injectService = new XC_MethodHook() {
+        @Override
+        protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+            String packageName = (String) XposedHelpers.getObjectField(param.getResult(), "packageName");
+            if (!packageName.equals(APP_PACKAGE) && !packageName.equals(BuildConfig.APPLICATION_ID)) {
+                return;
+            }
+            log(packageName);
+            if (packageName.equals(APP_PACKAGE)) {
+                ArrayList currFeatures = (ArrayList) XposedHelpers.getObjectField(param.getResult(), "reqFeatures");
+                if (currFeatures == null) {
+                    FeatureInfo usbFeature = new FeatureInfo();
+                    usbFeature.name = "android.hardware.usb.host";
+                    usbFeature.flags = 0;
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                        usbFeature.version = 0;
+                    }
+                    log(packageName + usbFeature);
+                    ArrayList<FeatureInfo> featureSet = new ArrayList<>();
+                    featureSet.add(usbFeature);
+                    XposedHelpers.setObjectField(param.getResult(), "reqFeatures", featureSet);
+                }
+                log(packageName + XposedHelpers.getObjectField(param.getResult(), "reqFeatures"));
+                remotePlayServices = (ArrayList) XposedHelpers.getObjectField(param.getResult(), "services");
+                log(packageName + remotePlayServices);
+                for (Object service : remotePlayServices) {
+                    log(packageName + service);
+                    ServiceInfo serviceInfo = (ServiceInfo) XposedHelpers.getObjectField(service, "info");
+                    if (serviceInfo.name.equals("com.limelight.binding.input.driver.UsbDriverService")) {
+                        return;
+                    }
+                }
+
+                if (usbService != null) {
+                    log(packageName + usbService);
+                    XposedHelpers.setObjectField(XposedHelpers.getObjectField(usbService, "info"), "processName", APP_PACKAGE);
+                    XposedHelpers.setObjectField(XposedHelpers.getObjectField(usbService, "info"), "packageName", APP_PACKAGE);
+                    XposedHelpers.setObjectField(XposedHelpers.getObjectField(usbService, "info"), "applicationInfo", XposedHelpers.getObjectField(param.getResult(), "applicationInfo"));
+                    XposedHelpers.setObjectField(usbService, "owner", param.getResult());
+                    XposedHelpers.setObjectField(usbService, "componentName", null);
+                    XposedHelpers.callMethod(XposedHelpers.getObjectField(param.getResult(), "services"), "add", usbService);
+                    usbService = null;
+                    return;
+                }
+                remotePlayPackage = param.getResult();
+                log(packageName + remotePlayPackage);
+                return;
+            }
+
+            if (packageName.equals(BuildConfig.APPLICATION_ID)) {
+                log(packageName + XposedHelpers.getObjectField(param.getResult(), "reqFeatures"));
+                log(BuildConfig.APPLICATION_ID + remotePlayServices);
+                ArrayList services = (ArrayList) XposedHelpers.getObjectField(param.getResult(), "services");
+                for (Object service : services) {
+                    ServiceInfo serviceInfo = (ServiceInfo) XposedHelpers.getObjectField(service, "info");
+                    if (serviceInfo.name.equals("com.limelight.binding.input.driver.UsbDriverService")) {
+                        log(packageName + service);
+                        usbService = service;
+                        break;
+                    }
+                }
+
+                log(packageName + remotePlayPackage);
+                if (remotePlayPackage != null && usbService != null) {
+                    XposedHelpers.setObjectField(XposedHelpers.getObjectField(usbService, "info"), "processName", APP_PACKAGE);
+                    XposedHelpers.setObjectField(XposedHelpers.getObjectField(usbService, "info"), "packageName", APP_PACKAGE);
+                    XposedHelpers.setObjectField(XposedHelpers.getObjectField(usbService, "info"), "applicationInfo", XposedHelpers.getObjectField(remotePlayPackage, "applicationInfo"));
+                    XposedHelpers.setObjectField(usbService, "owner", remotePlayPackage);
+                    XposedHelpers.setObjectField(usbService, "componentName", null);
+                    XposedHelpers.callMethod(remotePlayServices, "add", usbService);
+                    log(packageName + remotePlayServices);
+                    remotePlayPackage = null;
+                    remotePlayServices = null;
+                    usbService = null;
+                }
+            }
+        }
+    };
 
     @Override
     public void onGamepadStateChange(boolean sensor) {

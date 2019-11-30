@@ -2,10 +2,14 @@ package com.rAs.android.rpgamepad;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.util.SparseIntArray;
 import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.widget.Toast;
+
+import com.limelight.binding.input.driver.AbstractController;
+import com.limelight.binding.input.driver.UsbDriverListener;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -18,7 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-public class PSGamepadHandler {
+public class PSGamepadHandler implements UsbDriverListener {
     public static class Gamepad {
 
         static final int BUTTON_BACK = 0x1;
@@ -87,6 +91,8 @@ public class PSGamepadHandler {
     private PSGamepadValues prevGamepadValues, gamepadValues;
 
     public float analogDeadZone = 0f;
+
+    public AbstractController activeController;
 
     public PSGamepadHandler(Context context, String profileName, SharedPreferences prefs) {
         if(this.context == null && context != null)
@@ -291,86 +297,7 @@ public class PSGamepadHandler {
 
             if(button == 0) continue;
 
-            int buttonState = gamepadValues.getButtonState();
-
-            // Digital input -> Analog output
-            switch(button) {
-                case Gamepad.AXIS_LEFT_ANALOG_UP:
-                    if(action == KeyEvent.ACTION_DOWN || gamepadValues.getLeftAxisY() != ANALOG_STICK_NEUTRAL_VALUE)
-                        gamepadValues.setLeftAxisY(action == KeyEvent.ACTION_DOWN ? ANALOG_MAX_VALUE : ANALOG_STICK_NEUTRAL_VALUE);
-                    break;
-                case Gamepad.AXIS_LEFT_ANALOG_RIGHT:
-                    if(action == KeyEvent.ACTION_DOWN || gamepadValues.getLeftAxisX() != ANALOG_STICK_NEUTRAL_VALUE)
-                        gamepadValues.setLeftAxisX(action == KeyEvent.ACTION_DOWN ? ANALOG_MAX_VALUE : ANALOG_STICK_NEUTRAL_VALUE);
-                    break;
-                case Gamepad.AXIS_LEFT_ANALOG_DOWN:
-                    if(action == KeyEvent.ACTION_DOWN || gamepadValues.getLeftAxisY() != ANALOG_MAX_VALUE)
-                        gamepadValues.setLeftAxisY(action == KeyEvent.ACTION_DOWN ? 0 : ANALOG_STICK_NEUTRAL_VALUE);
-                    break;
-                case Gamepad.AXIS_LEFT_ANALOG_LEFT:
-                    if(action == KeyEvent.ACTION_DOWN || gamepadValues.getLeftAxisX() != ANALOG_MAX_VALUE)
-                        gamepadValues.setLeftAxisX(action == KeyEvent.ACTION_DOWN ? 0 : ANALOG_STICK_NEUTRAL_VALUE);
-                    break;
-                case Gamepad.AXIS_RIGHT_ANALOG_UP:
-                    if(action == KeyEvent.ACTION_DOWN || gamepadValues.getRightAxisY() != ANALOG_STICK_NEUTRAL_VALUE)
-                        gamepadValues.setRightAxisY(action == KeyEvent.ACTION_DOWN ? ANALOG_MAX_VALUE : ANALOG_STICK_NEUTRAL_VALUE);
-                    break;
-                case Gamepad.AXIS_RIGHT_ANALOG_RIGHT:
-                    if(action == KeyEvent.ACTION_DOWN || gamepadValues.getRightAxisX() != ANALOG_STICK_NEUTRAL_VALUE)
-                        gamepadValues.setRightAxisX(action == KeyEvent.ACTION_DOWN ? ANALOG_MAX_VALUE : ANALOG_STICK_NEUTRAL_VALUE);
-                    break;
-                case Gamepad.AXIS_RIGHT_ANALOG_DOWN:
-                    if(action == KeyEvent.ACTION_DOWN || gamepadValues.getRightAxisY() != ANALOG_MAX_VALUE)
-                        gamepadValues.setRightAxisY(action == KeyEvent.ACTION_DOWN ? 0 : ANALOG_STICK_NEUTRAL_VALUE);
-                    break;
-                case Gamepad.AXIS_RIGHT_ANALOG_LEFT:
-                    if(action == KeyEvent.ACTION_DOWN || gamepadValues.getRightAxisX() != ANALOG_MAX_VALUE)
-                        gamepadValues.setRightAxisX(action == KeyEvent.ACTION_DOWN ? 0 : ANALOG_STICK_NEUTRAL_VALUE);
-                    break;
-                case Gamepad.AXIS_L2:
-                    gamepadValues.setLeftTrigger(action == KeyEvent.ACTION_DOWN ? ANALOG_MAX_VALUE : 0);
-                    if (action == KeyEvent.ACTION_DOWN) {
-                        buttonState |= Gamepad.BUTTON_L2;
-                    } else if (action == KeyEvent.ACTION_UP) {
-                        buttonState &= ~Gamepad.BUTTON_L2;
-                    }
-                    gamepadValues.setButtonState(buttonState);
-                    gamepadValues.setChangedButtons(Gamepad.BUTTON_L2);
-                    break;
-                case Gamepad.AXIS_R2:
-                    gamepadValues.setRightTrigger(action == KeyEvent.ACTION_DOWN ? ANALOG_MAX_VALUE : 0);
-                    if (action == KeyEvent.ACTION_DOWN) {
-                        buttonState |= Gamepad.BUTTON_R2;
-                    } else if (action == KeyEvent.ACTION_UP) {
-                        buttonState &= ~Gamepad.BUTTON_R2;
-                    }
-                    gamepadValues.setButtonState(buttonState);
-                    gamepadValues.setChangedButtons(Gamepad.BUTTON_R2);
-                    break;
-
-                // Digital input -> Digital output
-                default:
-                    if (event.getSource() == InputDevice.SOURCE_JOYSTICK) {
-                        break;
-                    }
-                    switch (action) {
-                        case KeyEvent.ACTION_DOWN:
-                            buttonState |= button;
-                            if (buttons == this.buttonCombines)
-                                buttonCombinePressed.add(event.getKeyCode());
-                            break;
-                        case KeyEvent.ACTION_UP:
-                            buttonState &= ~button;
-                            if (buttons == this.buttonCombines)
-                                buttonCombinePressed.remove(event.getKeyCode());
-                                break;
-                    }
-
-                    gamepadValues.setButtonState(buttonState);
-                    gamepadValues.setChangedButtons(button);
-                    break;
-
-            }
+            setButtonState(action, button, event);
         }
 
         boolean sensorChanged = isSensorChanged();
@@ -379,6 +306,89 @@ public class PSGamepadHandler {
 
         storePrevGamepadValues(sensorChanged);
         onGamepadStateChangeListener.onGamepadStateChange(sensorChanged);
+    }
+
+    private void setButtonState(int action, int button, KeyEvent event) {
+        int buttonState = gamepadValues.getButtonState();
+
+        // Digital input -> Analog output
+        switch(button) {
+            case Gamepad.AXIS_LEFT_ANALOG_UP:
+                if(action == KeyEvent.ACTION_DOWN || gamepadValues.getLeftAxisY() != ANALOG_STICK_NEUTRAL_VALUE)
+                    gamepadValues.setLeftAxisY(action == KeyEvent.ACTION_DOWN ? ANALOG_MAX_VALUE : ANALOG_STICK_NEUTRAL_VALUE);
+                break;
+            case Gamepad.AXIS_LEFT_ANALOG_RIGHT:
+                if(action == KeyEvent.ACTION_DOWN || gamepadValues.getLeftAxisX() != ANALOG_STICK_NEUTRAL_VALUE)
+                    gamepadValues.setLeftAxisX(action == KeyEvent.ACTION_DOWN ? ANALOG_MAX_VALUE : ANALOG_STICK_NEUTRAL_VALUE);
+                break;
+            case Gamepad.AXIS_LEFT_ANALOG_DOWN:
+                if(action == KeyEvent.ACTION_DOWN || gamepadValues.getLeftAxisY() != ANALOG_MAX_VALUE)
+                    gamepadValues.setLeftAxisY(action == KeyEvent.ACTION_DOWN ? 0 : ANALOG_STICK_NEUTRAL_VALUE);
+                break;
+            case Gamepad.AXIS_LEFT_ANALOG_LEFT:
+                if(action == KeyEvent.ACTION_DOWN || gamepadValues.getLeftAxisX() != ANALOG_MAX_VALUE)
+                    gamepadValues.setLeftAxisX(action == KeyEvent.ACTION_DOWN ? 0 : ANALOG_STICK_NEUTRAL_VALUE);
+                break;
+            case Gamepad.AXIS_RIGHT_ANALOG_UP:
+                if(action == KeyEvent.ACTION_DOWN || gamepadValues.getRightAxisY() != ANALOG_STICK_NEUTRAL_VALUE)
+                    gamepadValues.setRightAxisY(action == KeyEvent.ACTION_DOWN ? ANALOG_MAX_VALUE : ANALOG_STICK_NEUTRAL_VALUE);
+                break;
+            case Gamepad.AXIS_RIGHT_ANALOG_RIGHT:
+                if(action == KeyEvent.ACTION_DOWN || gamepadValues.getRightAxisX() != ANALOG_STICK_NEUTRAL_VALUE)
+                    gamepadValues.setRightAxisX(action == KeyEvent.ACTION_DOWN ? ANALOG_MAX_VALUE : ANALOG_STICK_NEUTRAL_VALUE);
+                break;
+            case Gamepad.AXIS_RIGHT_ANALOG_DOWN:
+                if(action == KeyEvent.ACTION_DOWN || gamepadValues.getRightAxisY() != ANALOG_MAX_VALUE)
+                    gamepadValues.setRightAxisY(action == KeyEvent.ACTION_DOWN ? 0 : ANALOG_STICK_NEUTRAL_VALUE);
+                break;
+            case Gamepad.AXIS_RIGHT_ANALOG_LEFT:
+                if(action == KeyEvent.ACTION_DOWN || gamepadValues.getRightAxisX() != ANALOG_MAX_VALUE)
+                    gamepadValues.setRightAxisX(action == KeyEvent.ACTION_DOWN ? 0 : ANALOG_STICK_NEUTRAL_VALUE);
+                break;
+            case Gamepad.AXIS_L2:
+                gamepadValues.setLeftTrigger(action == KeyEvent.ACTION_DOWN ? ANALOG_MAX_VALUE : 0);
+                if (action == KeyEvent.ACTION_DOWN) {
+                    buttonState |= Gamepad.BUTTON_L2;
+                } else if (action == KeyEvent.ACTION_UP) {
+                    buttonState &= ~Gamepad.BUTTON_L2;
+                }
+                gamepadValues.setButtonState(buttonState);
+                gamepadValues.setChangedButtons(Gamepad.BUTTON_L2);
+                break;
+            case Gamepad.AXIS_R2:
+                gamepadValues.setRightTrigger(action == KeyEvent.ACTION_DOWN ? ANALOG_MAX_VALUE : 0);
+                if (action == KeyEvent.ACTION_DOWN) {
+                    buttonState |= Gamepad.BUTTON_R2;
+                } else if (action == KeyEvent.ACTION_UP) {
+                    buttonState &= ~Gamepad.BUTTON_R2;
+                }
+                gamepadValues.setButtonState(buttonState);
+                gamepadValues.setChangedButtons(Gamepad.BUTTON_R2);
+                break;
+
+            // Digital input -> Digital output
+            default:
+                if (event.getSource() == InputDevice.SOURCE_JOYSTICK) {
+                    break;
+                }
+                switch (action) {
+                    case KeyEvent.ACTION_DOWN:
+                        buttonState |= button;
+                        if (buttons == this.buttonCombines)
+                            buttonCombinePressed.add(event.getKeyCode());
+                        break;
+                    case KeyEvent.ACTION_UP:
+                        buttonState &= ~button;
+                        if (buttons == this.buttonCombines)
+                            buttonCombinePressed.remove(event.getKeyCode());
+                        break;
+                }
+
+                gamepadValues.setButtonState(buttonState);
+                gamepadValues.setChangedButtons(button);
+                break;
+
+        }
     }
 
     @SuppressWarnings("deprecation")
@@ -398,9 +408,6 @@ public class PSGamepadHandler {
         gamepadValues.setLeftTrigger(0);
         gamepadValues.setRightTrigger(0);
 
-        int buttonState = gamepadValues.getButtonState();
-        int changedButtons = gamepadValues.getChangedButtons();
-
         for(int axis : AXISES) {
             List<InputInfo> axises = isCombineButtonPressed ? this.axiseCombines : this.axises;
 
@@ -408,146 +415,12 @@ public class PSGamepadHandler {
                 if(input.getKeyCode() != axis) continue;
 
                 float value = event.getAxisValue(axis, pointerIndex);
-                int v = 0;
                 if(axis == MotionEvent.AXIS_RX || axis == MotionEvent.AXIS_RY) {
                     value = (value + 1) / 2f;
                 } else if((axis == MotionEvent.AXIS_BRAKE || axis == MotionEvent.AXIS_GAS) && value < 0) {
                     value = 0;
                 }
-
-                int button = input.getOutput();
-
-                // Analog input -> Analog output
-                switch(button) {
-                    case Gamepad.AXIS_LEFT_ANALOG_UP:
-                    case Gamepad.AXIS_LEFT_ANALOG_DOWN:
-                    case Gamepad.AXIS_LEFT_ANALOG_LEFT:
-                    case Gamepad.AXIS_LEFT_ANALOG_RIGHT:
-                    case Gamepad.AXIS_RIGHT_ANALOG_UP:
-                    case Gamepad.AXIS_RIGHT_ANALOG_DOWN:
-                    case Gamepad.AXIS_RIGHT_ANALOG_LEFT:
-                    case Gamepad.AXIS_RIGHT_ANALOG_RIGHT:
-                        if(Math.abs(value) > analogDeadZone) v = (short)(value * 127f) + ANALOG_STICK_NEUTRAL_VALUE;
-                        break;
-                    case Gamepad.AXIS_L2:
-                    case Gamepad.AXIS_R2:
-                        if(Math.abs(value) > analogDeadZone) v = (short)(value * ANALOG_MAX_VALUE);
-                        break;
-
-                    // Analog input -> Digital output
-                    default:
-                        if(Math.abs(value) <= analogDeadZone) value = 0;
-
-                        if(input.isNegative() && value > 0 || !input.isNegative() && value < 0) {
-                            continue;
-                        }
-
-                        boolean isDown = Math.abs(value) > 0.5f;
-
-                        if(isDown && input.getToProfile() != null) {
-                            boolean result = init(input.getToProfile(), null);
-                            if(context != null && result) {
-                                Toast.makeText(context, "[ " + input.getToProfile() + " ]", Toast.LENGTH_SHORT).show();
-                            }
-                            return;
-                        }
-
-                        if(isDown) {
-                            buttonState |= button;
-                            changedButtons |= button;
-                        } else {
-                            buttonState &= -(button + 1);
-                            if(button == Gamepad.DPAD_UP) {
-                                buttonState &= -(Gamepad.DPAD_DOWN + 1);
-                            } else if(button == Gamepad.DPAD_DOWN) {
-                                buttonState &= -(Gamepad.DPAD_UP + 1);
-                            } else if(button == Gamepad.DPAD_LEFT) {
-                                buttonState &= -(Gamepad.DPAD_RIGHT + 1);
-                            } else if(button == Gamepad.DPAD_RIGHT) {
-                                buttonState &= -(Gamepad.DPAD_LEFT + 1);
-                            }
-
-                            changedButtons |= (button + 1);
-                        }
-
-                        gamepadValues.setButtonState(buttonState);
-                        gamepadValues.setChangedButtons(changedButtons);
-
-                        continue;
-                }
-
-                if (v == 0) {
-                    // Clear the trigger buttons if we haven't already
-                    if (button == Gamepad.AXIS_L2 || button == Gamepad.AXIS_R2) {
-                        buttonState &= ~(button == Gamepad.AXIS_L2 ? Gamepad.BUTTON_L2 : Gamepad.BUTTON_R2);
-                        gamepadValues.setButtonState(buttonState);
-                        gamepadValues.setChangedButtons(button);
-                    }
-                    continue;
-                }
-
-                // Analog input -> Analog output
-                if(v > 0 && (button == Gamepad.AXIS_L2 || button == Gamepad.AXIS_R2)) {
-                    switch (button) {
-                        case Gamepad.AXIS_L2:
-                            gamepadValues.setLeftTrigger(v);
-                            buttonState |= Gamepad.BUTTON_L2;
-                            gamepadValues.setButtonState(buttonState);
-                            gamepadValues.setChangedButtons(Gamepad.BUTTON_L2);
-                            break;
-                        case Gamepad.AXIS_R2:
-                            gamepadValues.setRightTrigger(v);
-                            buttonState |= Gamepad.BUTTON_R2;
-                            gamepadValues.setButtonState(buttonState);
-                            gamepadValues.setChangedButtons(Gamepad.BUTTON_R2);
-                            break;
-                    }
-                } else if(v > ANALOG_STICK_NEUTRAL_VALUE) {
-                    switch (button) {
-                        case Gamepad.AXIS_LEFT_ANALOG_UP:
-                            gamepadValues.setLeftAxisY(v);
-                            break;
-                        case Gamepad.AXIS_LEFT_ANALOG_RIGHT:
-                            gamepadValues.setLeftAxisX(v);
-                            break;
-                        case Gamepad.AXIS_RIGHT_ANALOG_UP:
-                            gamepadValues.setRightAxisY(v);
-                            break;
-                        case Gamepad.AXIS_RIGHT_ANALOG_RIGHT:
-                            gamepadValues.setRightAxisX(v);
-                            break;
-                    }
-                } else if(v < ANALOG_STICK_NEUTRAL_VALUE) {
-                    switch(button) {
-                        case Gamepad.AXIS_LEFT_ANALOG_DOWN:
-                            gamepadValues.setLeftAxisY(v);
-                            break;
-
-                        case Gamepad.AXIS_LEFT_ANALOG_LEFT:
-                            gamepadValues.setLeftAxisX(v);
-                            break;
-
-                        case Gamepad.AXIS_RIGHT_ANALOG_DOWN:
-                            gamepadValues.setRightAxisY(v);
-                            break;
-
-                        case Gamepad.AXIS_RIGHT_ANALOG_LEFT:
-                            gamepadValues.setRightAxisX(v);
-                            break;
-
-                        case Gamepad.AXIS_L2:
-                            buttonState &= ~Gamepad.BUTTON_L2;
-                            gamepadValues.setButtonState(buttonState);
-                            gamepadValues.setChangedButtons(Gamepad.BUTTON_L2);
-                            break;
-
-                        case Gamepad.AXIS_R2:
-                            buttonState &= ~Gamepad.BUTTON_R2;
-                            gamepadValues.setButtonState(buttonState & ~Gamepad.BUTTON_R2);
-                            gamepadValues.setChangedButtons(Gamepad.BUTTON_R2);
-                            break;
-                    }
-                }
+                setGamepadAxisState(input, value);
             }
         }
 
@@ -557,6 +430,146 @@ public class PSGamepadHandler {
 
         storePrevGamepadValues(sensorChanged);
         onGamepadStateChangeListener.onGamepadStateChange(sensorChanged);
+    }
+
+    private void setGamepadAxisState(InputInfo input, float value) {
+        int v = 0;
+        int button = input.getOutput();
+        int buttonState = gamepadValues.getButtonState();
+        int changedButtons = gamepadValues.getChangedButtons();
+
+
+        // Analog input -> Analog output
+        switch(button) {
+            case Gamepad.AXIS_LEFT_ANALOG_UP:
+            case Gamepad.AXIS_LEFT_ANALOG_DOWN:
+            case Gamepad.AXIS_LEFT_ANALOG_LEFT:
+            case Gamepad.AXIS_LEFT_ANALOG_RIGHT:
+            case Gamepad.AXIS_RIGHT_ANALOG_UP:
+            case Gamepad.AXIS_RIGHT_ANALOG_DOWN:
+            case Gamepad.AXIS_RIGHT_ANALOG_LEFT:
+            case Gamepad.AXIS_RIGHT_ANALOG_RIGHT:
+                if(Math.abs(value) > analogDeadZone) v = (short)(value * 127f) + ANALOG_STICK_NEUTRAL_VALUE;
+                break;
+            case Gamepad.AXIS_L2:
+            case Gamepad.AXIS_R2:
+                if(Math.abs(value) > analogDeadZone) v = (short)(value * ANALOG_MAX_VALUE);
+                break;
+
+            // Analog input -> Digital output
+            default:
+                if(Math.abs(value) <= analogDeadZone) value = 0;
+
+                if(input.isNegative() && value > 0 || !input.isNegative() && value < 0) {
+                    return;
+                }
+
+                boolean isDown = Math.abs(value) > 0.5f;
+
+                if(isDown && input.getToProfile() != null) {
+                    boolean result = init(input.getToProfile(), null);
+                    if(context != null && result) {
+                        Toast.makeText(context, "[ " + input.getToProfile() + " ]", Toast.LENGTH_SHORT).show();
+                    }
+                    return;
+                }
+
+                if(isDown) {
+                    buttonState |= button;
+                    changedButtons |= button;
+                } else {
+                    buttonState &= -(button + 1);
+                    if(button == Gamepad.DPAD_UP) {
+                        buttonState &= -(Gamepad.DPAD_DOWN + 1);
+                    } else if(button == Gamepad.DPAD_DOWN) {
+                        buttonState &= -(Gamepad.DPAD_UP + 1);
+                    } else if(button == Gamepad.DPAD_LEFT) {
+                        buttonState &= -(Gamepad.DPAD_RIGHT + 1);
+                    } else if(button == Gamepad.DPAD_RIGHT) {
+                        buttonState &= -(Gamepad.DPAD_LEFT + 1);
+                    }
+
+                    changedButtons |= (button + 1);
+                }
+
+                gamepadValues.setButtonState(buttonState);
+                gamepadValues.setChangedButtons(changedButtons);
+
+                return;
+        }
+
+        if (v == 0) {
+            // Clear the trigger buttons if we haven't already
+            if (button == Gamepad.AXIS_L2 || button == Gamepad.AXIS_R2) {
+                buttonState &= ~(button == Gamepad.AXIS_L2 ? Gamepad.BUTTON_L2 : Gamepad.BUTTON_R2);
+                gamepadValues.setButtonState(buttonState);
+                gamepadValues.setChangedButtons(button);
+            }
+            return;
+        }
+
+        // Analog input -> Analog output
+        if(v > 0 && (button == Gamepad.AXIS_L2 || button == Gamepad.AXIS_R2)) {
+            switch (button) {
+                case Gamepad.AXIS_L2:
+                    gamepadValues.setLeftTrigger(v);
+                    buttonState |= Gamepad.BUTTON_L2;
+                    gamepadValues.setButtonState(buttonState);
+                    gamepadValues.setChangedButtons(Gamepad.BUTTON_L2);
+                    break;
+                case Gamepad.AXIS_R2:
+                    gamepadValues.setRightTrigger(v);
+                    buttonState |= Gamepad.BUTTON_R2;
+                    gamepadValues.setButtonState(buttonState);
+                    gamepadValues.setChangedButtons(Gamepad.BUTTON_R2);
+                    break;
+            }
+        } else if(v > ANALOG_STICK_NEUTRAL_VALUE) {
+            switch (button) {
+                case Gamepad.AXIS_LEFT_ANALOG_UP:
+                    gamepadValues.setLeftAxisY(v);
+                    break;
+                case Gamepad.AXIS_LEFT_ANALOG_RIGHT:
+                    gamepadValues.setLeftAxisX(v);
+                    break;
+                case Gamepad.AXIS_RIGHT_ANALOG_UP:
+                    gamepadValues.setRightAxisY(v);
+                    break;
+                case Gamepad.AXIS_RIGHT_ANALOG_RIGHT:
+                    gamepadValues.setRightAxisX(v);
+                    break;
+            }
+        } else if(v < ANALOG_STICK_NEUTRAL_VALUE) {
+            switch(button) {
+                case Gamepad.AXIS_LEFT_ANALOG_DOWN:
+                    gamepadValues.setLeftAxisY(v);
+                    break;
+
+                case Gamepad.AXIS_LEFT_ANALOG_LEFT:
+                    gamepadValues.setLeftAxisX(v);
+                    break;
+
+                case Gamepad.AXIS_RIGHT_ANALOG_DOWN:
+                    gamepadValues.setRightAxisY(v);
+                    break;
+
+                case Gamepad.AXIS_RIGHT_ANALOG_LEFT:
+                    gamepadValues.setRightAxisX(v);
+                    break;
+
+                case Gamepad.AXIS_L2:
+                    buttonState &= ~Gamepad.BUTTON_L2;
+                    gamepadValues.setButtonState(buttonState);
+                    gamepadValues.setChangedButtons(Gamepad.BUTTON_L2);
+                    break;
+
+                case Gamepad.AXIS_R2:
+                    buttonState &= ~Gamepad.BUTTON_R2;
+                    gamepadValues.setButtonState(buttonState & ~Gamepad.BUTTON_R2);
+                    gamepadValues.setChangedButtons(Gamepad.BUTTON_R2);
+                    break;
+            }
+        }
     }
 
     public PSGamepadValues getGamepadValues() {
@@ -593,6 +606,102 @@ public class PSGamepadHandler {
 
         prevGamepadValues.setButtonState(gamepadValues.getButtonState());
         prevGamepadValues.setChangedButtons(gamepadValues.getChangedButtons());
+    }
+
+    @Override
+    public void reportControllerState(int controllerId, SparseIntArray buttonFlags, float leftStickX, float leftStickY, float rightStickX, float rightStickY, float leftTrigger, float rightTrigger) {
+        for(int i = 0; i < buttonFlags.size(); i++) {
+            int keyCode = buttonFlags.keyAt(i);
+            int action = buttonFlags.get(keyCode);
+            KeyEvent event = new KeyEvent(action, keyCode);
+
+            if(keyCode == combineButtonKeyCode) {
+                isCombineButtonPressed = action == KeyEvent.ACTION_DOWN;
+                continue;
+            }
+
+            List<InputInfo> buttons = isCombineButtonPressed || buttonCombinePressed.contains(keyCode) ? this.buttonCombines : this.buttons;
+
+            for(InputInfo input : buttons) {
+                if (input.getKeyCode() != keyCode) continue;
+
+                if (input.getToProfile() != null) {
+                    boolean result = init(input.getToProfile(), null);
+                    if(context != null && result) {
+                        Toast.makeText(context, "[ " + input.getToProfile() + " ]", Toast.LENGTH_SHORT).show();
+                    }
+                    break;
+                }
+
+                int button = input.getOutput();
+
+                if(button == 0) continue;
+
+                setButtonState(action, button, event);
+            }
+        }
+        for(int axis : AXISES) {
+            List<InputInfo> axises = isCombineButtonPressed ? this.axiseCombines : this.axises;
+
+            for(InputInfo input : axises) {
+                if (input.getKeyCode() != axis) continue;
+
+                switch (axis) {
+                    case MotionEvent.AXIS_X:
+                        setGamepadAxisState(input, leftStickX);
+                        break;
+                    case MotionEvent.AXIS_Y:
+                        setGamepadAxisState(input, leftStickY);
+                        break;
+                    case MotionEvent.AXIS_Z:
+                        setGamepadAxisState(input, rightStickX);
+                        break;
+                    case MotionEvent.AXIS_RZ:
+                        setGamepadAxisState(input, rightStickY);
+                        break;
+                    case MotionEvent.AXIS_BRAKE:
+                        setGamepadAxisState(input, leftTrigger);
+                        break;
+                    case MotionEvent.AXIS_GAS:
+                        setGamepadAxisState(input, rightTrigger);
+                        break;
+                    case MotionEvent.AXIS_HAT_X:
+                        if (buttonFlags.get(KeyEvent.KEYCODE_DPAD_LEFT) == KeyEvent.ACTION_DOWN) {
+                            setGamepadAxisState(input, -1.0f);
+                        } else if (buttonFlags.get(KeyEvent.KEYCODE_DPAD_RIGHT) == KeyEvent.ACTION_DOWN) {
+                            setGamepadAxisState(input, 1.0f);
+                        } else {
+                            setGamepadAxisState(input, 0);
+                        }
+                        break;
+                    case MotionEvent.AXIS_HAT_Y:
+                        if (buttonFlags.get(KeyEvent.KEYCODE_DPAD_UP) == KeyEvent.ACTION_DOWN) {
+                            setGamepadAxisState(input, -1.0f);
+                        } else if (buttonFlags.get(KeyEvent.KEYCODE_DPAD_DOWN) == KeyEvent.ACTION_DOWN) {
+                            setGamepadAxisState(input, 1.0f);
+                        } else {
+                            setGamepadAxisState(input, 0);
+                        }
+                        break;
+                }
+            }
+        }
+        boolean sensorChanged = isSensorChanged();
+
+        if(!isButtonChanged() && !sensorChanged) return;
+
+        storePrevGamepadValues(sensorChanged);
+        onGamepadStateChangeListener.onGamepadStateChange(sensorChanged);
+    }
+
+    @Override
+    public void deviceRemoved(AbstractController controller) {
+        activeController = null;
+    }
+
+    @Override
+    public void deviceAdded(AbstractController controller) {
+        activeController = controller;
     }
 
 }
